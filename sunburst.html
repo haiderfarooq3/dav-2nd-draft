@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive Sunburst Chart</title>
+  <script src="https://d3js.org/d3.v6.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    #controls {
+      text-align: center;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    #chart {
+      width: 100%;
+      height: 85vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+    }
+    .tooltip {
+      position: absolute;
+      text-align: center;
+      width: auto;
+      padding: 5px;
+      background: lightgray;
+      border: 1px solid gray;
+      border-radius: 4px;
+      pointer-events: none;
+      opacity: 0;
+    }
+    .breadcrumb {
+      margin-top: 10px;
+      text-align: center;
+      font-size: 14px;
+    }
+    .color-scheme {
+      text-align: center;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label for="countryFilter">Select Country: </label>
+    <select id="countryFilter">
+      <option value="All">All</option>
+    </select>
+    <br/>
+    <div class="color-scheme">
+      <label for="colorScheme">Color Scheme:</label>
+      <select id="colorScheme">
+        <option value="schemeCategory10">Category10</option>
+        <option value="schemePastel1">Pastel1</option>
+        <option value="schemeAccent">Accent</option>
+      </select>
+    </div>
+  </div>
+  <div id="chart"></div>
+  <div class="breadcrumb" id="breadcrumb"></div>
+  <script>
+    const width = 700;
+    const height = 700;
+    const radius = Math.min(width, height) / 2;
+
+    const svg = d3.select("#chart")
+      .append("svg")
+      .attr("width", width)
+      .attr("height", height)
+      .append("g")
+      .attr("transform", `translate(${width / 2},${height / 2})`);
+
+    const tooltip = d3.select("body").append("div")
+      .attr("class", "tooltip");
+
+    const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+    let currentColorScheme = "schemeCategory10"; // Store the current color scheme
+
+    // Load and process the data
+    d3.csv("processed_LTBI_data.csv").then(data => {
+      // Convert numeric values
+      data.forEach(d => d.Metric = +d.Metric);
+
+      // Get unique countries for the filter dropdown
+      const countries = Array.from(new Set(data.map(d => d.Country)));
+      const countryFilter = d3.select("#countryFilter");
+      countries.forEach(country => {
+        countryFilter.append("option").text(country).attr("value", country);
+      });
+
+      // Function to render the chart with filtering
+      function renderChart(filteredData) {
+        // Build a hierarchical structure
+        const nestedData = d3.group(filteredData, d => d.Country, d => d.Year);
+
+        const root = d3.hierarchy({ name: "World", children: Array.from(nestedData, ([country, years]) => ({
+            name: country,
+            children: Array.from(years, ([year, records]) => ({
+              name: year,
+              value: d3.sum(records, r => r.Metric)
+            }))
+          }))
+        });
+
+        // Create partition layout
+        const partition = d3.partition().size([2 * Math.PI, radius])(root.sum(d => d.value));
+
+        const arc = d3.arc()
+          .startAngle(d => d.x0)
+          .endAngle(d => d.x1)
+          .innerRadius(d => d.y0)
+          .outerRadius(d => d.y1);
+
+        // Draw the chart
+        svg.selectAll("path").remove(); // Clear previous paths
+        svg.selectAll("path")
+          .data(partition.descendants().slice(1)) // Skip the root node
+          .join("path")
+          .attr("d", arc)
+          .style("fill", d => color((d.children ? d : d.parent).data.name))
+          .style("stroke", "#fff")
+          .style("opacity", 1)
+          .on("mouseover", function (event, d) {
+            svg.selectAll("path").style("opacity", 0.3); // Dim all segments
+            d3.select(this).style("opacity", 1); // Highlight hovered segment
+            tooltip.style("opacity", 1)
+              .html(`<strong>${d.data.name}</strong><br>Value: ${d.value || "No data"}`)
+              .style("left", (event.pageX + 10) + "px")
+              .style("top", (event.pageY - 28) + "px");
+          })
+          .on("mouseout", function () {
+            svg.selectAll("path").style("opacity", 1); // Restore all segments
+            tooltip.style("opacity", 0);
+          })
+          .on("click", function (event, d) {
+            updateBreadcrumbs(d);
+          });
+
+        // Update breadcrumb trail
+        function updateBreadcrumbs(node) {
+          const trail = [];
+          let current = node;
+          while (current.parent) {
+            trail.unshift(current.data.name);
+            current = current.parent;
+          }
+          d3.select("#breadcrumb").html(trail.join(" > "));
+        }
+
+        // Add interactivity
+        svg.selectAll("path").style("cursor", "pointer");
+      }
+
+      // Initial render with all data
+      renderChart(data);
+
+      // Add filter event listener
+      countryFilter.on("change", function () {
+        const selectedCountry = this.value;
+        const filteredData = selectedCountry === "All" ? data : data.filter(d => d.Country === selectedCountry);
+        renderChart(filteredData);
+      });
+
+      // Color scheme selection
+      d3.select("#colorScheme").on("change", function () {
+        currentColorScheme = this.value;
+        color.range(d3[currentColorScheme]);
+        renderChart(data); // Re-render with new color scheme
+      });
+    }).catch(error => {
+      console.error("Error loading or processing data:", error);
+    });
+  </script>
+</body>
+</html>

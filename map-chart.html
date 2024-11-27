@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive Choropleth Map</title>
+  <script src="https://d3js.org/d3.v6.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    #map {
+      width: 100%;
+      height: 90vh;
+    }
+    #controls {
+      padding: 10px;
+      text-align: center;
+    }
+    .tooltip {
+      position: absolute;
+      text-align: center;
+      width: auto;
+      padding: 5px;
+      background: lightgray;
+      border: 1px solid gray;
+      border-radius: 4px;
+      pointer-events: none;
+      opacity: 0;
+    }
+    .legend {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 10px;
+    }
+    .legend rect {
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label for="year">Select Year: </label>
+    <select id="year"></select>
+  </div>
+  <div id="map"></div>
+  <div class="legend">
+    <svg id="legend" width="600" height="60"></svg>
+  </div>
+  <script>
+    const width = 1400; 
+    const height = 700; 
+    const mapDiv = d3.select("#map");
+    const svg = mapDiv.append("svg")
+      .attr("width", "100%")
+      .attr("height", "90%")
+      .attr("viewBox", `0 0 ${width} ${height}`)
+      .attr("preserveAspectRatio", "xMidYMid meet");
+
+    const tooltip = d3.select("body").append("div")
+      .attr("class", "tooltip");
+
+    const projection = d3.geoNaturalEarth1()
+      .scale(250)
+      .translate([width / 2, height / 2]);
+    const path = d3.geoPath().projection(projection);
+
+    // Two separate color scales
+    const colorScaleLow = d3.scaleSequential(d3.interpolateBlues).domain([0, 80000]);
+    const colorScaleHigh = d3.scaleSequential(d3.interpolateReds).domain([80000, 120000]);
+
+    const zoom = d3.zoom()
+      .scaleExtent([1, 8])
+      .on("zoom", (event) => {
+        g.attr("transform", event.transform);
+      });
+
+    svg.call(zoom);
+
+    const g = svg.append("g");
+
+    // Load data
+    Promise.all([
+      d3.json("https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson"),
+      d3.csv("processed_LTBI_data.csv") 
+    ]).then(([geojson, data]) => {
+      const years = Array.from(new Set(data.map(d => +d.Year))).sort((a, b) => a - b);
+
+      // Populate year selector
+      const yearSelect = d3.select("#year");
+      years.forEach(year => {
+        yearSelect.append("option").text(year).attr("value", year);
+      });
+
+      yearSelect.on("change", () => updateMap(+yearSelect.node().value));
+      updateMap(years[0]);
+
+      function updateMap(year) {
+        const yearData = data.filter(d => +d.Year === year);
+        const dataByISO = new Map(yearData.map(d => [d.ISO3, +d.Metric]));
+
+        // Draw the map
+        g.selectAll("path").remove();
+        g.selectAll("path")
+          .data(geojson.features)
+          .join("path")
+          .attr("d", path)
+          .attr("fill", d => {
+            const value = dataByISO.get(d.id);
+            if (value === undefined) return "#ccc";
+            return value <= 80000 ? colorScaleLow(value) : colorScaleHigh(value);
+          })
+          .attr("stroke", "#333")
+          .on("mouseover", function (event, d) {
+            const value = dataByISO.get(d.id);
+            tooltip.style("opacity", 1)
+              .html(`<strong>${d.properties.name}</strong><br>Estimated Contacts: ${value || "No data"}`)
+              .style("left", (event.pageX + 10) + "px")
+              .style("top", (event.pageY - 28) + "px");
+          })
+          .on("mouseout", () => tooltip.style("opacity", 0))
+          .on("click", function (event, d) {
+            const [[x0, y0], [x1, y1]] = path.bounds(d);
+            svg.transition().duration(1000).call(
+              zoom.transform,
+              d3.zoomIdentity
+                .translate(width / 2, height / 2)
+                .scale(Math.min(8, 0.9 / Math.max((x1 - x0) / width, (y1 - y0) / height)))
+                .translate(-(x0 + x1) / 2, -(y0 + y1) / 2)
+            );
+          });
+
+        // Update the legend
+        updateLegend();
+      }
+
+      function updateLegend() {
+        const legendWidth = 500; 
+        const legendHeight = 20; 
+
+        const legendSvg = d3.select("#legend");
+        legendSvg.selectAll("*").remove();
+
+        const gradientLow = legendSvg.append("defs")
+          .append("linearGradient")
+          .attr("id", "gradientLow")
+          .attr("x1", "0%")
+          .attr("x2", "100%");
+
+        gradientLow.append("stop")
+          .attr("offset", "0%")
+          .attr("stop-color", colorScaleLow(0));
+
+        gradientLow.append("stop")
+          .attr("offset", "100%")
+          .attr("stop-color", colorScaleLow(80000));
+
+        const gradientHigh = legendSvg.append("defs")
+          .append("linearGradient")
+          .attr("id", "gradientHigh")
+          .attr("x1", "0%")
+          .attr("x2", "100%");
+
+        gradientHigh.append("stop")
+          .attr("offset", "0%")
+          .attr("stop-color", colorScaleHigh(80000));
+
+        gradientHigh.append("stop")
+          .attr("offset", "100%")
+          .attr("stop-color", colorScaleHigh(120000));
+
+        // Add first gradient for 0-80000
+        legendSvg.append("rect")
+          .attr("width", legendWidth / 2)
+          .attr("height", legendHeight)
+          .style("fill", "url(#gradientLow)")
+          .attr("x", 0)
+          .attr("y", 10);
+
+        // Add second gradient for 80000+
+        legendSvg.append("rect")
+          .attr("width", legendWidth / 2)
+          .attr("height", legendHeight)
+          .style("fill", "url(#gradientHigh)")
+          .attr("x", legendWidth / 2)
+          .attr("y", 10);
+
+        // Add axis for both ranges
+        const legendScaleLow = d3.scaleLinear().domain([0, 80000]).range([0, legendWidth / 2]);
+        const legendScaleHigh = d3.scaleLinear().domain([80000, 120000]).range([legendWidth / 2, legendWidth]);
+
+        const legendAxisLow = d3.axisBottom(legendScaleLow).ticks(5).tickSize(10);
+        const legendAxisHigh = d3.axisBottom(legendScaleHigh).ticks(5).tickSize(10);
+
+        legendSvg.append("g")
+          .attr("transform", `translate(0, ${30})`)
+          .call(legendAxisLow);
+
+        legendSvg.append("g")
+          .attr("transform", `translate(0, ${30})`)
+          .call(legendAxisHigh);
+      }
+    });
+  </script>
+</body>
+</html>

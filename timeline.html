@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Interactive Hierarchical Tree Map for Entity Categorization</title>
+  <script src="https://d3js.org/d3.v6.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 0;
+    }
+    #controls {
+      text-align: center;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    #chart {
+      width: 100%;
+      height: 85vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      position: relative;
+    }
+    .tooltip {
+      position: absolute;
+      text-align: center;
+      width: auto;
+      padding: 5px;
+      background: lightgray;
+      border: 1px solid gray;
+      border-radius: 4px;
+      pointer-events: none;
+      opacity: 0;
+    }
+    .breadcrumb {
+      margin-top: 10px;
+      text-align: center;
+      font-size: 14px;
+    }
+    .instructions {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 14px;
+      color: #555;
+    }
+    rect {
+      cursor: pointer;
+    }
+    rect:hover {
+      opacity: 0.7;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <label for="countryFilter">Select Country: </label>
+    <select id="countryFilter">
+      <option value="All">All</option>
+    </select>
+  </div>
+  <div id="chart"></div>
+  <div class="breadcrumb" id="breadcrumb"></div>
+  <div class="instructions">
+    <p><strong>Instructions:</strong></p>
+    <p>Select a country to filter the data. Click on any country or year to drill down and explore further.</p>
+  </div>
+
+  <script>
+    const width = 800;
+    const height = 600;
+
+    const svg = d3.select("#chart")
+      .append("svg")
+      .attr("width", width)
+      .attr("height", height);
+
+    const tooltip = d3.select("body").append("div")
+      .attr("class", "tooltip");
+
+    // Set a default color scheme (using d3.schemeCategory10)
+    const color = d3.scaleOrdinal(d3.schemeCategory10);
+
+    let currentLevel = "All";  // To track the current hierarchical level
+
+    // Load and process the CSV data
+    d3.csv("processed_LTBI_data.csv").then(data => {
+
+      // Convert numeric values and prepare the data
+      data.forEach(d => {
+        d.Metric = +d.Metric;
+      });
+
+      // Get unique countries for the filter dropdown
+      const countries = Array.from(new Set(data.map(d => d.Country)));
+      const countryFilter = d3.select("#countryFilter");
+      countries.forEach(country => {
+        countryFilter.append("option").text(country).attr("value", country);
+      });
+
+      // Group the data by Country and Year
+      const nestedData = d3.group(data, d => d.Country, d => d.Year);
+
+      // Build a hierarchical structure
+      const hierarchyData = {
+        name: "World",
+        children: Array.from(nestedData, ([country, years]) => ({
+          name: country,
+          children: Array.from(years, ([year, records]) => ({
+            name: year,
+            value: d3.sum(records, r => r.Metric)
+          }))
+        }))
+      };
+
+      // Function to render the chart
+      function renderChart(filteredData) {
+        const root = d3.hierarchy(filteredData)
+          .sum(d => d.value)
+          .sort((a, b) => b.value - a.value);
+
+        // Create treemap layout
+        const treemap = d3.treemap()
+          .size([width, height])
+          .padding(1)
+          .round(true);
+
+        treemap(root);
+
+        // Draw rectangles for each node in the tree map
+        const nodes = svg.selectAll(".node")
+          .data(root.leaves())
+          .join("g")
+          .attr("class", "node")
+          .attr("transform", d => `translate(${d.x0}, ${d.y0})`);
+
+        nodes.append("rect")
+          .attr("width", d => d.x1 - d.x0)
+          .attr("height", d => d.y1 - d.y0)
+          .style("fill", d => color(d.data.name)) // Apply the default color scheme
+          .style("stroke", "white")
+          .style("stroke-width", 1)
+          .on("mouseover", function (event, d) {
+            tooltip.style("opacity", 1)
+              .html(`<strong>${d.data.name}</strong><br>Value: ${d.value}`)
+              .style("left", (event.pageX + 10) + "px")
+              .style("top", (event.pageY - 28) + "px");
+          })
+          .on("mouseout", function () {
+            tooltip.style("opacity", 0);
+          })
+          .on("click", function (event, d) {
+            updateBreadcrumbs(d);
+            renderChart(d.data.children || {});
+          });
+
+        nodes.append("text")
+          .attr("x", 5)
+          .attr("y", 5)
+          .attr("dy", ".35em")
+          .text(d => `${d.data.name} (${d.value})`)
+          .style("font-size", "10px")
+          .style("fill", "white");
+
+        // Update breadcrumb navigation
+        function updateBreadcrumbs(node) {
+          const trail = [];
+          let current = node;
+          while (current.parent) {
+            trail.unshift(current.data.name);
+            current = current.parent;
+          }
+          d3.select("#breadcrumb").html(trail.join(" > "));
+        }
+      }
+
+      // Initial render with all data
+      renderChart(hierarchyData);
+
+      // Add filter event listener for hierarchical level
+      d3.select("#countryFilter").on("change", function () {
+        const selectedCountry = this.value;
+        currentLevel = selectedCountry;
+        const filteredData = selectedCountry === "All" ? hierarchyData : filterByCountry(hierarchyData, selectedCountry);
+        renderChart(filteredData);
+      });
+
+      // Function to filter data based on the selected country
+      function filterByCountry(data, country) {
+        if (country === "All") return data;
+        return {
+          name: "Filtered by Country",
+          children: data.children.filter(d => d.name === country)
+        };
+      }
+
+    }).catch(error => {
+      console.error("Error loading or processing data:", error);
+    });
+  </script>
+</body>
+</html>
